@@ -3,15 +3,17 @@ name: Run Assessment
 on:
   push:
     paths:
-      - 'scenarios/finance/scenario.toml'
+      - 'scenario.toml'
   workflow_dispatch:
 
 jobs:
   evaluate:
-    uses: RDI-Foundation/agentbeats-leaderboard-template/.github/workflows/run-scenario.yml@main
+    uses: liux3372/agentbeats-leaderboard-template/.github/workflows/run-scenario.yml@main
     with:
-      leaderboard_repo: 'RDI-Foundation/agentbeats-leaderboard-template'
-      scenario_file: 'scenarios/finance/scenario.toml'
+      leaderboard_repo: 'liux3372/agentbeats-leaderboard-template'
+      scenario_file: 'scenario.toml'
     secrets:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
+      SEC_EDGAR_API_KEY: ${{ secrets.SEC_EDGAR_API_KEY }}
       GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
