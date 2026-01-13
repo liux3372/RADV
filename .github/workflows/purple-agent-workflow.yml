@@ -8,7 +8,7 @@ on:
 
 jobs:
   evaluate:
-    uses: RDI-Foundation/agentbeats-leaderboard-template/.github/workflows/runner.yml@main
+    uses: RDI-Foundation/agentbeats-leaderboard-template/.github/workflows/run-scenario.yml
     with:
       leaderboard_repo: 'RDI-Foundation/agentbeats-leaderboard-template'
       scenario_file: 'scenarios/finance/scenario.toml'
