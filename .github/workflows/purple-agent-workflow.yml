@@ -55,7 +55,7 @@ jobs:
             -e SERP_API_KEY=${{ secrets.SERP_API_KEY }} \
             -e SEC_EDGAR_API_KEY=${{ secrets.SEC_EDGAR_API_KEY }} \
             ${{ env.PURPLE_IMAGE }} \
-            python scenarios/finance/finance_agent.py --host 0.0.0.0 --port 9099 --card-url http://purple-agent:9099/"
+            python scenarios/finance/finance_agent.py --host 0.0.0.0 --port 9099 --card-url http://purple-agent:9099/
 
       - name: Start Green Agent (Finance Evaluator)
         run: |
