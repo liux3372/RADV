@@ -20,7 +20,9 @@ from tool_provider import ToolProvider
 system_prompt = '''
 You are the green agent, the evaluator for the finance agent benchmark.
 
-Your task is to analyze an answer and break it down into individual checks that can be automatically evaluated.
+Your task is to analyze an answer and:
+1. Break it down into individual checks that can be automatically evaluated
+2. Provide a performance score (0.0 to 1.0) that reflects the overall quality of the answer
 
 You will receive a structured input:
 - the URL of the finance agent participant
@@ -39,6 +41,7 @@ You will receive a structured input:
 4. Extract the main answer text from the response (the content after "FINAL ANSWER:" if present, or the main response text)
 5. Use the question as context to understand what needs to be evaluated
 6. Convert the answer into structured evaluation checks
+7. Calculate a performance score (0.0 to 1.0) based on the answer's completeness, accuracy, clarity, and source quality
 
 ### Creating Evaluation Checks:
 
@@ -72,22 +75,47 @@ Create meaningful checks that capture substantive elements of the answer. Each c
 
 ### Output Format:
 
-After receiving the answer from the finance agent, analyze it and return a JSON array in this format:
+After receiving the answer from the finance agent, analyze it and return a JSON object with two fields:
+
+1. **checks**: An array of evaluation checks (same format as before)
+2. **performance_score**: A numerical score from 0.0 to 1.0 (or 0 to 100) representing the overall quality of the answer
+
+The format should be:
 
 ```json
-[
-  {
-    "operator": "edgar_research_operator",
-    "criteria": "specific criteria to check"
-  },
-  {
-    "operator": "edgar_research_operator",
-    "criteria": "another specific criteria"
-  }
-]
+{
+  "checks": [
+    {
+      "operator": "edgar_research_operator",
+      "criteria": "specific criteria to check"
+    },
+    {
+      "operator": "edgar_research_operator",
+      "criteria": "another specific criteria"
+    }
+  ],
+  "performance_score": 0.85
+}
 ```
 
-The JSON should be valid and parseable. Focus on creating checks that accurately capture the key information in the answer.
+### Performance Score Calculation:
+
+Calculate the performance score based on:
+- **Completeness**: Does the answer address all aspects of the question? (0-0.3 points)
+- **Accuracy**: Are the facts correct and well-sourced? (0-0.3 points)
+- **Clarity**: Is the answer clear and well-structured? (0-0.2 points)
+- **Source Quality**: Are sources provided and relevant? (0-0.2 points)
+
+The score should be a float between 0.0 and 1.0, where:
+- 0.9-1.0: Excellent answer that fully addresses the question with accurate, well-sourced information
+- 0.7-0.89: Good answer that addresses most aspects but may have minor gaps
+- 0.5-0.69: Adequate answer that addresses the question but has notable gaps or issues
+- 0.3-0.49: Poor answer that partially addresses the question but has significant issues
+- 0.0-0.29: Very poor answer that fails to address the question adequately
+
+**Important**: Always include a performance_score in your response. If you cannot determine a score, use 0.5 as a default, but try to provide a meaningful assessment based on the answer quality.
+
+The JSON should be valid and parseable. Focus on creating checks that accurately capture the key information in the answer and providing a meaningful performance score.
 '''
 
 def main():
@@ -102,7 +130,7 @@ def main():
     skill = AgentSkill(
         id='evaluate_finance_agent',
         name='Evaluate Finance Agent',
-        description='Evaluate a finance agent on its ability to answer financial questions accurately with proper source citation.',
+        description='Evaluate a finance agent on its ability to answer financial questions accurately with proper source citation. Returns evaluation checks and a performance score (0.0-1.0).',
         tags=['finance', 'evaluation'],
         examples=["""
         {

@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   finance-agent:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.finance-agent
     container_name: finance-agent
     ports:
       - "9099:9099"
@@ -16,7 +18,9 @@ services:
     restart: unless-stopped
 
   finance-evaluator:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.finance-evaluator
     container_name: finance-evaluator
     ports:
       - "9000:9000"

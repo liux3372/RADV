@@ -233,6 +233,72 @@ docker-compose logs -f finance-agent
 docker-compose down
 ```
 
+## Building and Pushing Docker Images
+
+This project uses **separate Docker images** for the finance agent and finance evaluator.
+
+### Build Both Images
+
+To build and push both images to a registry:
+
+```bash
+# Make script executable (first time only)
+chmod +x build-and-push-both.sh
+
+# Build and push to GitHub Container Registry
+./build-and-push-both.sh ghcr.io username/finance latest
+
+# Build and push to Docker Hub
+./build-and-push-both.sh docker.io username/finance latest
+
+# Using defaults (Docker Hub)
+./build-and-push-both.sh
+```
+
+This will create two images:
+- `{registry}/{prefix}-agent:{tag}` (e.g., `ghcr.io/username/finance-agent:latest`)
+- `{registry}/{prefix}-evaluator:{tag}` (e.g., `ghcr.io/username/finance-evaluator:latest`)
+
+### Build Individual Images
+
+**Finance Agent only:**
+```bash
+chmod +x build-and-push.sh
+./build-and-push.sh ghcr.io username/finance-agent latest
+# Finance Agent
+docker build -f Dockerfile.finance-agent -t your-registry/finance-agent:latest .
+docker push your-registry/finance-agent:latest
+```
+
+**Finance Evaluator only:**
+```bash
+# Finance Evaluator
+docker build -f Dockerfile.finance-evaluator -t your-registry/finance-evaluator:latest .
+docker push your-registry/finance-evaluator:latest
+```
+
+### Using Pre-built Images in docker-compose.yml
+
+After pushing images, update `docker-compose.yml`:
+
+```yaml
+services:
+  finance-agent:
+    image: ghcr.io/username/finance-agent:latest
+    # ... rest of config
+
+  finance-evaluator:
+    image: ghcr.io/username/finance-evaluator:latest
+    # ... rest of config
+```
+
+### Dockerfiles
+
+- `Dockerfile.finance-agent` - Finance Agent (Purple Agent) image
+- `Dockerfile.finance-evaluator` - Finance Evaluator (Green Agent) image
+
+Both images share the same base dependencies but have different entry points and exposed ports.
+
 ## Acknowledgments
 
 - Built with [Google ADK](https://github.com/google/adk)

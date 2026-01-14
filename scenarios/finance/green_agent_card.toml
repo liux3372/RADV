@@ -22,7 +22,11 @@ You are the green agent (evaluator) for the finance agent benchmark. Your role i
 
 5. Each check uses the `edgar_research_operator` to verify that specific criteria are present in the answer as complete, meaningful concepts. This verifies factual content such as numerical figures (accepting rounded values), names, dates, and relationships between facts.
 
-6. You return a JSON array of evaluation checks with 'operator' and 'criteria' fields that can be automatically evaluated.
+6. You calculate a performance score (0.0 to 1.0) based on the answer's completeness, accuracy, clarity, and source quality.
+
+7. You return a JSON object with:
+   - **checks**: An array of evaluation checks with 'operator' and 'criteria' fields that can be automatically evaluated
+   - **performance_score**: A numerical score from 0.0 to 1.0 representing the overall quality of the answer
 
 ## Evaluation Guidelines
 
@@ -48,7 +52,7 @@ streaming               = true
 [[skills]]
 id          = "evaluate_finance_agent"
 name        = "Evaluate Finance Agent"
-description = "Evaluate a finance agent on its ability to answer financial questions accurately with proper source citation. Converts the agent's answer into structured evaluation checks that can be automatically verified."
+description = "Evaluate a finance agent on its ability to answer financial questions accurately with proper source citation. Returns structured evaluation checks and a performance score (0.0-1.0) that can be automatically verified."
 tags        = ["finance", "evaluation", "a2a", "assessment"]
 examples    = [
     """

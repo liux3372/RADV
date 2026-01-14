@@ -34,7 +34,7 @@ else
 fi
 
 echo "Building Docker image: ${IMAGE_NAME}"
-docker build -t "${IMAGE_NAME}" .
+docker build -f Dockerfile.finance-agent -t "${IMAGE_NAME}" .
 
 echo "Pushing Docker image to registry..."
 docker push "${IMAGE_NAME}"
