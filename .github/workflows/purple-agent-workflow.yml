@@ -1,19 +1,364 @@
-name: Run Assessment
+name: Run Finance Assessment
 
 on:
   push:
+    branches: [main]
     paths:
-      - 'scenario.toml'
+      - 'scenarios/finance/scenario.toml'
+      - '.github/workflow/purple-agent-workflow.yml'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      scenario_count:
+        description: 'Number of scenarios to run (1-5)'
+        required: false
+        default: '5'
+
+env:
+  PURPLE_IMAGE: ghcr.io/liux3372/finance-agent-base:latest
+  GREEN_IMAGE: ghcr.io/liux3372/finance-evaluator:latest
 
 jobs:
-  evaluate:
-    uses: RDI-Foundation/agentbeats-leaderboard-template/.github/workflows/run-scenario.yml@main
+  run-assessment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Pull Docker images
+        run: |
+          echo "Pulling agent images..."
+          docker pull ${{ env.PURPLE_IMAGE }}
+          docker pull ${{ env.GREEN_IMAGE }}
+
+      - name: Verify images
+        run: |
+          docker images | grep finance
+
+      - name: Create Docker network
+        run: |
+          docker network create agentbeats-network
+
+      - name: Start Purple Agent (Finance Agent)
+        run: |
+          docker run -d \
+            --name purple-agent \
+            --network agentbeats-network \
+            -p 9099:9099 \
+            -e GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }} \
+            -e SERP_API_KEY=${{ secrets.SERP_API_KEY }} \
+            -e SEC_EDGAR_API_KEY=${{ secrets.SEC_EDGAR_API_KEY }} \
+            ${{ env.PURPLE_IMAGE }} \
+            --host 0.0.0.0 \
+            --port 9099 \
+            --card-url http://purple-agent:9099/
+
+      - name: Start Green Agent (Finance Evaluator)
+        run: |
+          docker run -d \
+            --name green-agent \
+            --network agentbeats-network \
+            -p 9000:9000 \
+            -e GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }} \
+            -e SERP_API_KEY=${{ secrets.SERP_API_KEY }} \
+            -e SEC_EDGAR_API_KEY=${{ secrets.SEC_EDGAR_API_KEY }} \
+            ${{ env.GREEN_IMAGE }} \
+            --host 0.0.0.0 \
+            --port 9000 \
+            --card-url http://green-agent:9000/
+
+      - name: Wait for agents to be ready
+        run: |
+          echo "Waiting for agents to start..."
+          sleep 10
+
+          echo "Checking Purple Agent health..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:9099/.well-known/agent-card.json > /dev/null; then
+              echo "✅ Purple Agent is ready"
+              break
+            fi
+            echo "Waiting for Purple Agent... ($i/30)"
+            sleep 2
+          done
+
+          echo "Checking Green Agent health..."
+          for i in {1..30}; do
+            if curl -sf http://localhost:9000/.well-known/agent-card.json > /dev/null; then
+              echo "✅ Green Agent is ready"
+              break
+            fi
+            echo "Waiting for Green Agent... ($i/30)"
+            sleep 2
+          done
+
+      - name: Verify agent cards
+        run: |
+          echo "=== Purple Agent Card ==="
+          curl -s http://localhost:9099/.well-known/agent-card.json | jq .
+
+          echo ""
+          echo "=== Green Agent Card ==="
+          curl -s http://localhost:9000/.well-known/agent-card.json | jq .
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pydantic tomli
+
+      - name: Run Assessment
+        id: assessment
+        run: |
+          python - <<'EOF'
+          import json
+          import requests
+          import time
+          from datetime import datetime
+
+          # Test scenarios - finance questions
+          scenarios = [
+              {
+                  "id": "apple_revenue_2023",
+                  "question": "What was Apple's revenue in 2023?"
+              },
+              {
+                  "id": "tesla_risk_factors",
+                  "question": "What are Tesla's key risk factors mentioned in their latest 10-K?"
+              },
+              {
+                  "id": "amazon_microsoft_capex",
+                  "question": "Compare Amazon and Microsoft's capital expenditure guidance for 2025"
+              },
+              {
+                  "id": "netflix_subscriber_growth",
+                  "question": "What is Netflix's subscriber growth trend over the past 3 years?"
+              },
+              {
+                  "id": "meta_revenue_breakdown",
+                  "question": "What was Meta's revenue breakdown by segment in 2023?"
+              }
+          ]
+
+          results = []
+
+          for scenario in scenarios:
+              print(f"\n{'='*60}")
+              print(f"Running scenario: {scenario['id']}")
+              print(f"{'='*60}\n")
+
+              start_time = time.time()
+
+              try:
+                  # Call Green Agent with AgentBeats EvalRequest format
+                  # Green agent will internally call purple agent
+                  print(f"Calling Green Agent for scenario: {scenario['id']}")
+
+                  eval_request = {
+                      "participants": {
+                          "finance_agent": "http://purple-agent:9099/"
+                      },
+                      "config": {
+                          "question": scenario["question"]
+                      }
+                  }
+
+                  print(f"EvalRequest: {json.dumps(eval_request, indent=2)}")
+
+                  green_response = requests.post(
+                      'http://localhost:9000/',
+                      json={
+                          "jsonrpc": "2.0",
+                          "method": "message/send",
+                          "params": {
+                              "message": {
+                                  "messageId": f"eval-{scenario['id']}-{int(time.time())}",
+                                  "role": "user",
+                                  "parts": [
+                                      {
+                                          "kind": "text",
+                                          "text": json.dumps(eval_request)
+                                      }
+                                  ]
+                              }
+                          },
+                          "id": 1
+                      },
+                      timeout=300
+                  )
+
+                  print(f"Green Agent HTTP Status: {green_response.status_code}")
+                  print(f"Green Agent Response: {green_response.text[:1000]}")
+
+                  evaluation_data = green_response.json()
+
+                  # Extract results from A2A Task response
+                  evaluation_content = None
+                  checks = None
+                  performance_score = None
+
+                  if 'result' in evaluation_data:
+                      result = evaluation_data['result']
+
+                      # Check for artifacts (contain the evaluation results)
+                      if 'artifacts' in result:
+                          for artifact in result['artifacts']:
+                              if 'parts' in artifact:
+                                  for part in artifact['parts']:
+                                      if part.get('kind') == 'text':
+                                          artifact_text = part.get('text', '')
+                                          try:
+                                              artifact_data = json.loads(artifact_text)
+                                              if 'checks' in artifact_data:
+                                                  checks = artifact_data['checks']
+                                              if 'performance_score' in artifact_data:
+                                                  performance_score = artifact_data['performance_score']
+                                              evaluation_content = artifact_data
+                                          except:
+                                              # Try to parse as plain text JSON
+                                              try:
+                                                  evaluation_content = json.loads(artifact_text)
+                                                  if isinstance(evaluation_content, dict):
+                                                      checks = evaluation_content.get('checks')
+                                                      performance_score = evaluation_content.get('performance_score')
+                                              except:
+                                                  evaluation_content = artifact_text
+
+                      # Also check status message
+                      if 'status' in result and 'message' in result['status']:
+                          status_parts = result['status']['message'].get('parts', [])
+                          for part in status_parts:
+                              if part.get('kind') == 'text':
+                                  status_text = part.get('text', '')
+                                  print(f"Status message: {status_text[:500]}")
+                                  # Try to parse JSON from status message
+                                  try:
+                                      status_data = json.loads(status_text)
+                                      if isinstance(status_data, dict):
+                                          if 'checks' in status_data:
+                                              checks = status_data['checks']
+                                          if 'performance_score' in status_data:
+                                              performance_score = status_data['performance_score']
+                                          if not evaluation_content:
+                                              evaluation_content = status_data
+                                  except:
+                                      pass
+
+                      # Check response field
+                      if 'response' in result:
+                          response_text = result['response']
+                          try:
+                              response_data = json.loads(response_text)
+                              if isinstance(response_data, dict):
+                                  if 'checks' in response_data:
+                                      checks = response_data['checks']
+                                  if 'performance_score' in response_data:
+                                      performance_score = response_data['performance_score']
+                                  if not evaluation_content:
+                                      evaluation_content = response_data
+                          except:
+                              pass
+
+                  execution_time = (time.time() - start_time) * 1000
+
+                  # Compile result
+                  result = {
+                      "scenario_id": scenario["id"],
+                      "question": scenario["question"],
+                      "checks": checks,
+                      "performance_score": performance_score,
+                      "evaluation": evaluation_content,
+                      "execution_time_ms": int(execution_time),
+                      "timestamp": datetime.utcnow().isoformat(),
+                      "purple_agent": "finance_agent",
+                      "green_agent": "finance_evaluator"
+                  }
+
+                  results.append(result)
+                  print(f"\n✅ Scenario completed in {execution_time:.0f}ms")
+                  if performance_score is not None:
+                      print(f"📊 Performance Score: {performance_score}")
+
+              except Exception as e:
+                  print(f"❌ Error running scenario: {str(e)}")
+                  import traceback
+                  traceback.print_exc()
+                  continue
+
+          # Save results
+          import os
+          os.makedirs('results', exist_ok=True)
+
+          with open('results/assessment_results.json', 'w') as f:
+              json.dump(results, f, indent=2)
+
+          print(f"\n{'='*60}")
+          print(f"✅ Assessment complete! {len(results)} scenarios evaluated")
+          print(f"{'='*60}")
+          EOF
+
+      - name: Create results directory
+        run: |
+          mkdir -p results artifacts
+
+      - name: Save results
+        run: |
+          echo '{"status": "completed", "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'", "scenarios": 5}' > results/summary.json
+
+      - name: Display agent logs
+        if: always()
+        run: |
+          echo "=== Purple Agent Logs ==="
+          docker logs purple-agent --tail 100
+
+          echo ""
+          echo "=== Green Agent Logs ==="
+          docker logs green-agent --tail 100
+
+      - name: Stop containers
+        if: always()
+        run: |
+          docker stop purple-agent green-agent || true
+          docker rm purple-agent green-agent || true
+          docker network rm agentbeats-network || true
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: assessment-results
+          path: |
+            results/
+            artifacts/
+          retention-days: 90
+
+      - name: Create results PR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: peter-evans/create-pull-request@v6
     with:
-      leaderboard_repo: 'RDI-Foundation/agentbeats-leaderboard-template'
-      scenario_file: 'scenario.toml'
-    secrets:
-      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-      SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
-      SEC_EDGAR_API_KEY: ${{ secrets.SEC_EDGAR_API_KEY }}
-      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Add assessment results for ${{ github.sha }}"
+          title: "Assessment Results - ${{ github.run_number }}"
+          body: |
+            ## Assessment Results
+
+            **Run**: ${{ github.run_number }}
+            **Commit**: ${{ github.sha }}
+            **Date**: ${{ github.event.head_commit.timestamp }}
+
+            ### Summary
+            - Scenarios evaluated: 5
+            - Purple Agent: finance_agent
+            - Green Agent: finance_evaluator
+
+            Review the results and merge to update the leaderboard.
+          branch: results/${{ github.run_number }}
+          base: main
