@@ -8,9 +8,9 @@ on:
 
 jobs:
   evaluate:
-    uses: liux3372/agentbeats-leaderboard-template/.github/workflows/run-scenario.yml@main
+    uses: RDI-Foundation/agentbeats-leaderboard-template/.github/workflows/run-scenario.yml@main
     with:
-      leaderboard_repo: 'liux3372/agentbeats-leaderboard-template'
+      leaderboard_repo: 'RDI-Foundation/agentbeats-leaderboard-template'
       scenario_file: 'scenario.toml'
     secrets:
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
