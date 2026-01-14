@@ -132,6 +132,11 @@ docker build -t registry/repository:tag .
 
 # Push to registry
 docker push registry/repository:tag
+
+# Build for Linux AMD64 architecture that GitHub Actions uses
+docker buildx build -f Dockerfile.finance-agent -t ghcr.io/liux3372/finance-agent-base:latest --platform linux/amd64,linux/arm64 --push .
+
+docker buildx build -f Dockerfile.finance-evaluator -t ghcr.io/liux3372/finance-evaluator:latest --platform linux/amd64,linux/arm64 --push .
 ```
 
 **Image naming format:**
