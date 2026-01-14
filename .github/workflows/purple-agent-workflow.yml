@@ -343,7 +343,7 @@ jobs:
       - name: Create results PR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: peter-evans/create-pull-request@v6
-    with:
+        with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "Add assessment results for ${{ github.sha }}"
           title: "Assessment Results - ${{ github.run_number }}"
