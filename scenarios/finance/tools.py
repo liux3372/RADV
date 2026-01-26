@@ -5,7 +5,7 @@ import traceback
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, Any
 
 import aiohttp
 import backoff
@@ -35,7 +35,7 @@ class RateLimiter:
         self._last_call_time: Optional[float] = None
         self._lock = asyncio.Lock()
     
-    async def wait_if_needed(self):
+    async def wait_if_needed(self) -> None:
         """Wait if necessary to maintain minimum delay between calls."""
         async with self._lock:
             if self._last_call_time is not None:
@@ -53,7 +53,7 @@ _gemini_rate_limiter = RateLimiter(
 )
 
 
-def is_429(exception):
+def is_429(exception) -> bool:
     is429 = (
         isinstance(exception, aiohttp.ClientResponseError)
         and exception.status == 429
@@ -109,11 +109,13 @@ class Tool(ABC):
         return definition
 
     @abstractmethod
-    def call_tool(self, arguments: dict, *args, **kwargs) -> list[str]:
+    async def call_tool(self, arguments: dict, *args, **kwargs) -> Any:
         pass
 
-    async def __call__(self, arguments: dict = None, *args, **kwargs) -> list[str]:
+    async def __call__(self, arguments: dict[str, Any] | None = None, *args, **kwargs) -> dict[str, Any]:
         try:
+            if arguments is None:
+                arguments = {}
             tool_result = await self.call_tool(arguments, *args, **kwargs)
             if self.name == "retrieve_information":
                 return {
@@ -160,24 +162,40 @@ class GoogleWebSearch(Tool):
         self.top_n_results = top_n_results
         if serpapi_api_key is None:
             serpapi_api_key = os.getenv("SERP_API_KEY")
-        self.serpapi_api_key = serpapi_api_key
+        # Strip whitespace to handle any accidental spaces in environment variable
+        if serpapi_api_key:
+            self.serpapi_api_key = serpapi_api_key.strip()
+        else:
+            self.serpapi_api_key = None
 
     @retry_on_429
-    async def _execute_search(self, search_query: str) -> list[str]:
+    async def _execute_search(self, search_query: str) -> list[dict[str, Any]]:
         """
-        Search the web for information using Google Search.
+        Search the web for information using Google Search via SerpAPI.
 
         Args:
             search_query (str): The query to search for
 
         Returns:
-            list[str]: A list of results from Google Search
+            list[dict[str, Any]]: A list of search result dictionaries from SerpAPI (each containing title, link, snippet, etc.)
         """
-        if not self.serpapi_api_key:
-            raise ValueError("SERPAPI_API_KEY is not set")
+        # Validate API key - check for None, empty string, or whitespace-only
+        if not self.serpapi_api_key or not self.serpapi_api_key.strip():
+            env_key = os.getenv("SERP_API_KEY")
+            if not env_key or not env_key.strip():
+                raise ValueError(
+                    "SERP_API_KEY environment variable is not set or is empty. "
+                    "Please set SERP_API_KEY in your environment or GitHub Actions secrets."
+                )
+            else:
+                raise ValueError(
+                    "SERP_API_KEY is not properly initialized. "
+                    f"Environment variable exists but was not passed to GoogleWebSearch. "
+                    f"Key length: {len(env_key)} characters."
+                )
 
         params = {
-            "api_key": self.serpapi_api_key,
+            "api_key": self.serpapi_api_key.strip(),  # Remove any whitespace
             "engine": "google",
             "q": search_query,
             "num": self.top_n_results,
@@ -190,12 +208,41 @@ class GoogleWebSearch(Tool):
             async with session.get(
                 "https://serpapi.com/search.json", params=params
             ) as response:
-                response.raise_for_status()  # This will raise ClientResponseError
+                # Handle 401 Unauthorized specifically
+                if response.status == 401:
+                    error_text = await response.text()
+                    try:
+                        error_json = json.loads(error_text)
+                        error_msg = error_json.get("error", error_text or "Unauthorized")
+                    except:
+                        error_msg = error_text if error_text else "Unauthorized"
+                    
+                    raise aiohttp.ClientResponseError(
+                        request_info=response.request_info,
+                        history=response.history,
+                        status=401,
+                        message=(
+                            f"SerpAPI authentication failed (401 Unauthorized). "
+                            f"Error: {error_msg}\n\n"
+                            f"Possible causes:\n"
+                            f"1. SERP_API_KEY is missing or not set in GitHub Actions secrets\n"
+                            f"2. SERP_API_KEY is invalid or expired\n"
+                            f"3. API key has incorrect format (should not have quotes or extra whitespace)\n"
+                            f"4. API key was not properly passed to the Docker container\n\n"
+                            f"To fix:\n"
+                            f"- Verify SERP_API_KEY is set in GitHub repository secrets\n"
+                            f"- Check that the secret name matches exactly: SERP_API_KEY\n"
+                            f"- Ensure the API key is valid at https://serpapi.com/dashboard\n"
+                            f"- Check Docker container logs to verify environment variable is set"
+                        )
+                    )
+                
+                response.raise_for_status()  # This will raise ClientResponseError for other errors
                 results = await response.json()
 
         return results.get("organic_results", [])
 
-    async def call_tool(self, arguments: dict) -> list[str]:
+    async def call_tool(self, arguments: dict) -> list[dict[str, Any]]:
         results = await self._execute_search(**arguments)
         return results
 
@@ -270,13 +317,13 @@ class EDGARSearch(Tool):
     async def _execute_search(
         self,
         query: str,
-        form_types: list[str],
-        ciks: list[str],
+        form_types: list[str] | str,
+        ciks: list[str] | str,
         start_date: str,
         end_date: str,
         page: int,
         top_n_results: int,
-    ) -> list[str]:
+    ) -> list[dict[str, Any]]:
         """
         Search the EDGAR Database through the SEC API asynchronously.
 
@@ -290,7 +337,7 @@ class EDGARSearch(Tool):
             top_n_results (int): The top N results to return
 
         Returns:
-            list[str]: A list of filing results
+            list[dict[str, Any]]: A list of filing result dictionaries (each containing metadata for a filing)
         """
 
         if not self.sec_api_key:
@@ -302,21 +349,23 @@ class EDGARSearch(Tool):
             and form_types.startswith("[")
             and form_types.endswith("]")
         ):
+            form_types_str = form_types  # Store string value for type narrowing
             try:
-                form_types = json.loads(form_types.replace("'", '"'))
+                form_types = json.loads(form_types_str.replace("'", '"'))
             except json.JSONDecodeError:
                 # Fallback to simple parsing if JSON parsing fails
                 form_types = [
-                    item.strip(" \"'") for item in form_types[1:-1].split(",")
+                    item.strip(" \"'") for item in form_types_str[1:-1].split(",")
                 ]
 
         # Parse ciks if it's a string representation of a JSON array
         if isinstance(ciks, str) and ciks.startswith("[") and ciks.endswith("]"):
+            ciks_str = ciks  # Store string value for type narrowing
             try:
-                ciks = json.loads(ciks.replace("'", '"'))
+                ciks = json.loads(ciks_str.replace("'", '"'))
             except json.JSONDecodeError:
                 # Fallback to simple parsing if JSON parsing fails
-                ciks = [item.strip(" \"'") for item in ciks[1:-1].split(",")]
+                ciks = [item.strip(" \"'") for item in ciks_str[1:-1].split(",")]
 
         if end_date > MAX_END_DATE:
             end_date = MAX_END_DATE
@@ -345,7 +394,7 @@ class EDGARSearch(Tool):
 
         return result.get("filings", [])[: int(top_n_results)]
 
-    async def call_tool(self, arguments: dict) -> list[str]:
+    async def call_tool(self, arguments: dict) -> list[dict[str, Any]]:
         try:
             return await self._execute_search(**arguments)
         except Exception as e:
@@ -432,17 +481,21 @@ class ParseHtmlPage(Tool):
         return text
 
     async def _save_tool_output(
-        self, output: list[str], key: str, data_storage: dict
-    ) -> None:
+        self, output: str, key: str, data_storage: dict
+    ) -> str:
         """
         Save the parsed HTML text to the data_storage dictionary.
 
         Args:
-            output (list[str]): The parsed text output from call_tool
+            output (str): The parsed text output from _parse_html_page
+            key (str): The key to use when saving the result
             data_storage (dict): The dictionary to save the results to
+
+        Returns:
+            str: A status message indicating success and listing current keys
         """
         if not output:
-            return
+            return ""
 
         tool_result = ""
         if key in data_storage:
@@ -465,18 +518,25 @@ class ParseHtmlPage(Tool):
 
         return tool_result
 
-    async def call_tool(self, arguments: dict, data_storage: dict) -> list[str]:
+    async def call_tool(self, arguments: dict, data_storage: dict) -> str:
         """
-        Parse an HTML page and return its text content.
+        Parse an HTML page and return a status message.
 
         Args:
             arguments (dict): Dictionary containing 'url' and 'key'
+            data_storage (dict): The dictionary to save the parsed content to
 
         Returns:
-            list[str]: A list containing the parsed text
+            str: A status message indicating success and listing current keys
         """
         url = arguments.get("url")
         key = arguments.get("key")
+        
+        if not url or not isinstance(url, str):
+            raise ValueError("'url' argument is required and must be a string")
+        if not key or not isinstance(key, str):
+            raise ValueError("'key' argument is required and must be a string")
+        
         text_output = await self._parse_html_page(url)
         tool_result = await self._save_tool_output(text_output, key, data_storage)
 
@@ -540,8 +600,11 @@ class RetrieveInformation(Tool):
 
     async def call_tool(
         self, arguments: dict, data_storage: dict, model: LLM, *args, **kwargs
-    ) -> list[str]:
-        prompt: str = arguments.get("prompt")
+    ) -> dict[str, Any]:
+        prompt = arguments.get("prompt")
+        if not prompt or not isinstance(prompt, str):
+            raise ValueError("'prompt' argument is required and must be a string")
+        
         input_character_ranges = arguments.get("input_character_ranges", [])
         if input_character_ranges is None:
             input_character_ranges = []
